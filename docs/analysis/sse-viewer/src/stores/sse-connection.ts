@@ -61,7 +61,7 @@ export class SSEConnection {
   @action
   connect() {
     this.disconnect()
-    const url = `${this.baseUrl}/global/event`
+    const url = `${this.baseUrl}/event`
     this.es = new EventSource(url)
     this.error = null
 
