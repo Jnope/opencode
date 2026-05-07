@@ -18,8 +18,10 @@ import type {
   Todo,
 } from "../utils/types"
 import { binarySearch } from "../utils/binary"
+import { cleanMessage } from "../utils/diffs"
 import { trimSessions } from "../utils/session-trim"
 import { DirectoryStore } from "./directory-store"
+import type { ProjectEntry } from "./bootstrap"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
@@ -27,7 +29,7 @@ const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 
 export interface GlobalEventInput {
   event: EventPayload
-  projects: { id: string; [key: string]: unknown }[]
+  projects: ProjectEntry[]
   onRefresh: () => void
 }
 
@@ -40,7 +42,7 @@ export const applyGlobalEvent = action("applyGlobalEvent", (input: GlobalEventIn
   }
 
   if (event.type === "project.updated") {
-    const properties = event.properties as { id: string; [key: string]: unknown }
+    const properties = event.properties as ProjectEntry
     const idx = input.projects.findIndex((p) => p.id === properties.id)
     if (idx >= 0) {
       input.projects[idx] = { ...input.projects[idx], ...properties }
@@ -139,7 +141,7 @@ export const applyDirectoryEvent = action("applyDirectoryEvent", (input: Directo
 
     // ─── Message events ───────────────────────────────────
     case "message.updated": {
-      const info = (event.properties as { info: Message }).info
+      const info = cleanMessage((event.properties as { info: Message }).info)
       store.upsertMessage(info.sessionID, info)
       break
     }

@@ -53,6 +53,11 @@ export interface UserMessage {
   time: { created: number }
   agent: string
   model: { providerID: string; modelID: string; variant?: string }
+  summary?: {
+    title?: string
+    body?: string
+    diffs?: SnapshotFileDiff[]
+  }
 }
 
 export interface AssistantMessage {

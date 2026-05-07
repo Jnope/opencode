@@ -11,6 +11,7 @@
 
 import { makeAutoObservable, action, observable } from "mobx"
 import { applyGlobalEvent, applyDirectoryEvent } from "./event-reducer"
+import { bootstrapDirectory, bootstrapGlobal, bootstrapDirectoriesFromProjects, type ProjectEntry } from "./bootstrap"
 import type { GlobalEvent, Part } from "../utils/types"
 import { ChildStoreManager } from "./child-store-manager"
 
@@ -34,8 +35,11 @@ export class SSEConnection {
   /** Child store manager for directory-scoped state */
   childStores: ChildStoreManager
 
-  /** Global projects list */
-  projects: { id: string; [key: string]: unknown }[] = []
+  /** Global projects list (populated by REST bootstrap + SSE events) */
+  projects: ProjectEntry[] = []
+
+  /** Whether global bootstrap (project list fetch) has completed */
+  globalBootstrapped = false
 
   /** Base URL for the opencode server */
   private baseUrl: string
@@ -69,6 +73,8 @@ export class SSEConnection {
       this.connected = true
       this.reconnectAttempt = 0
       this.startHeartbeat()
+      // Run global bootstrap if not yet done, then bootstrap directories
+      this.runGlobalBootstrap()
     }
 
     this.es.onmessage = (e) => {
@@ -87,7 +93,6 @@ export class SSEConnection {
       this.scheduleReconnect()
     }
   }
-
   @action
   disconnect() {
     if (this.es) {
@@ -189,7 +194,9 @@ export class SSEConnection {
           event: event.payload,
           projects: this.projects,
           onRefresh: () => {
-            // Re-bootstrap all directories
+            // server.connected or global.disposed — force re-bootstrap
+            this.globalBootstrapped = false
+            this.runGlobalBootstrap()
           },
         })
       } else {
@@ -198,7 +205,7 @@ export class SSEConnection {
           event: event.payload,
           store,
           onRebootstrap: (directory: string) => {
-            // Re-bootstrap the directory
+            bootstrapDirectory(directory, store, true)
           },
           directory: dir,
         })
@@ -206,6 +213,44 @@ export class SSEConnection {
     }
 
     this.staleDeltas.clear()
+  }
+
+  // ─── Bootstrap helpers ─────────────────────────────────────
+
+  /** Run global bootstrap: fetch project list, then bootstrap directories */
+  @action
+  private async runGlobalBootstrap() {
+    if (!this.globalBootstrapped) {
+      const projects = await bootstrapGlobal()
+      this.projects = projects
+      this.globalBootstrapped = true
+      // Auto-discover directories from project list
+      if (projects.length > 0) {
+        bootstrapDirectoriesFromProjects(projects, this.childStores)
+      }
+    }
+    // Always bootstrap existing directories that aren't complete
+    this.bootstrapExistingDirectories()
+  }
+
+  @action
+  private bootstrapExistingDirectories(force = false) {
+    for (const [dir, store] of Object.entries(this.childStores.children)) {
+      if (force || store.status !== "complete") {
+        bootstrapDirectory(dir, store, force)
+      }
+    }
+  }
+
+  /** Bootstrap a directory when it's first seen */
+  @action
+  ensureAndBootstrap(dir: string) {
+    const store = this.childStores.ensure(dir)
+    if (store.status === "loading") {
+      bootstrapDirectory(dir, store)
+    }
+    store.markAccessed()
+    return store
   }
 
   // ─── Page visibility ───────────────────────────────────────

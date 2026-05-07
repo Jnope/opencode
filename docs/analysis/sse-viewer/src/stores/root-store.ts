@@ -5,6 +5,7 @@
 
 import { makeAutoObservable, computed, action, observable } from "mobx"
 import { SSEConnection } from "./sse-connection"
+import { loadSessionMessages } from "./bootstrap"
 
 export class RootStore {
   sse: SSEConnection
@@ -68,12 +69,18 @@ export class RootStore {
     this.selectedSessionID = null
     if (dir) {
       this.sse.childStores.pin(dir)
+      // Bootstrap the directory if not yet loaded
+      this.sse.ensureAndBootstrap(dir)
     }
   }
 
   @action
   selectSession(sessionID: string | null) {
     this.selectedSessionID = sessionID
+    // Load messages for the selected session
+    if (sessionID && this.selectedDirectory && this.currentDirStore) {
+      loadSessionMessages(this.selectedDirectory, this.currentDirStore, sessionID)
+    }
   }
 
   connect() {

@@ -273,10 +273,13 @@ export class DirectoryStore implements DirectoryState {
       ...Object.keys(this.permission),
       ...Object.keys(this.question),
       ...Object.keys(this.session_status),
+      ...Object.values(this.part)
+        .map((parts) => parts?.find((part) => !!(part as any).sessionID)?.sessionID as string | undefined)
+        .filter((sessionID): sessionID is string => !!sessionID),
     ])
     const stale: string[] = []
     for (const id of allKeys) {
-      if (!keep.has(id)) stale.push(id)
+      if (!keep.has(id) && !stale.includes(id)) stale.push(id)
     }
     if (stale.length === 0) return
     for (const sessionID of stale) {
