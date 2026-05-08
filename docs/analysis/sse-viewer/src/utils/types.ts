@@ -94,6 +94,8 @@ export type Part =
   | StepStartPart
   | StepFinishPart
   | PatchPart
+  | FilePart
+  | AgentPart
 
 export interface TextPart {
   id: string
@@ -169,10 +171,47 @@ export interface PatchPart {
   files: string[]
 }
 
+export interface FilePart {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "file"
+  mime: string
+  filename?: string
+  url: string
+  source?: FilePartSource
+}
+
+export interface AgentPart {
+  id: string
+  sessionID: string
+  messageID: string
+  type: "agent"
+  name: string
+  source?: { value: string; start: number; end: number }
+}
+
+export type FilePartSource =
+  | { text: FilePartSourceText; type: "file"; path: string }
+  | { text: FilePartSourceText; type: "symbol"; path: string; range: Range; name: string; kind: number }
+  | { text: FilePartSourceText; type: "resource"; clientName: string; uri: string }
+
+export interface FilePartSourceText {
+  value: string
+  start: number
+  end: number
+}
+
+export interface Range {
+  start: { line: number; character: number }
+  end: { line: number; character: number }
+}
+
 export type ToolState =
-  | { type: "running" }
-  | { type: "completed"; output?: string }
-  | { type: "error"; error?: string }
+  | { type: "pending"; input?: Record<string, unknown>; raw?: string }
+  | { type: "running"; input?: Record<string, unknown> }
+  | { type: "completed"; output?: string; input?: Record<string, unknown>; metadata?: Record<string, unknown> }
+  | { type: "error"; error?: string; input?: Record<string, unknown>; metadata?: Record<string, unknown> }
 
 // ─── Permission ─────────────────────────────────────────────────
 
