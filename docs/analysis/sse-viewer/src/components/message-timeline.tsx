@@ -1,7 +1,7 @@
 import React from "react"
 import { observer } from "mobx-react-lite"
 import { useStore } from "../hooks/use-store"
-import type { Message, Part, TextPart, ReasoningPart, ToolPart, CompactionPart, FilePart, AgentPart } from "../utils/types"
+import type { Message, Part, TextPart, ReasoningPart, ToolPart, CompactionPart, FilePart, AgentPart, AssistantMessage, SessionStatus, UserMessage } from "../utils/types"
 
 // ─── Constants (matching source message-part.tsx) ─────────────
 
@@ -142,6 +142,128 @@ function isInline(part: FilePart) {
   return part.source?.text?.start !== undefined && part.source?.text?.end !== undefined
 }
 
+// ─── Error parsing — source: session-turn.tsx:29-80 ───────────
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+function unwrap(message: string): string {
+  const text = message.replace(/^Error:\s*/, "").trim()
+
+  const parse = (value: string) => {
+    try { return JSON.parse(value) as unknown }
+    catch { return undefined }
+  }
+
+  const read = (value: string) => {
+    const first = parse(value)
+    if (typeof first !== "string") return first
+    return parse(first.trim())
+  }
+
+  let json = read(text)
+
+  if (json === undefined) {
+    const start = text.indexOf("{")
+    const end = text.lastIndexOf("}")
+    if (start !== -1 && end > start) {
+      json = read(text.slice(start, end + 1))
+    }
+  }
+
+  if (!record(json)) return message
+
+  const err = record(json.error) ? json.error : undefined
+  if (err) {
+    const type = typeof err.type === "string" ? err.type : undefined
+    const msg = typeof err.message === "string" ? err.message : undefined
+    if (type && msg) return `${type}: ${msg}`
+    if (msg) return msg
+    if (type) return type
+    const code = typeof err.code === "string" ? err.code : undefined
+    if (code) return code
+  }
+
+  const msg = typeof json.message === "string" ? json.message : undefined
+  if (msg) return msg
+
+  const reason = typeof json.error === "string" ? json.error : undefined
+  if (reason) return reason
+
+  return message
+}
+
+// ─── Reasoning heading — source: session-turn.tsx:110-144 ─────
+
+function clean(value: string) {
+  return value
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/[*_~]+/g, "")
+    .trim()
+}
+
+function heading(text: string): string | undefined {
+  const markdown = text.replace(/\r\n?/g, "\n")
+
+  const html = markdown.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i)
+  if (html?.[1]) {
+    const value = clean(html[1].replace(/<[^>]+>/g, " "))
+    if (value) return value
+  }
+
+  const atx = markdown.match(/^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/m)
+  if (atx?.[1]) {
+    const value = clean(atx[1])
+    if (value) return value
+  }
+
+  const setext = markdown.match(/^([^\n]+)\n(?:=+|-+)\s*$/m)
+  if (setext?.[1]) {
+    const value = clean(setext[1])
+    if (value) return value
+  }
+
+  const strong = markdown.match(/^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*$/m)
+  if (strong?.[1]) {
+    const value = clean(strong[1])
+    if (value) return value
+  }
+
+  return undefined
+}
+
+// ─── Duration formatting — source: message-part.tsx:1417-1436
+
+function formatDuration(ms: number): string {
+  const total = Math.round(ms / 1000)
+  if (total < 60) return `${total}s`
+  const minutes = Math.floor(total / 60)
+  const seconds = total % 60
+  return `${minutes}m ${seconds}s`
+}
+
+// ─── Part visibility state — source: session-turn.tsx:95-108 ──
+
+function partState(part: Part, showReasoningSummaries = true): "visible" | undefined {
+  if (part.type === "tool") {
+    if (HIDDEN_TOOLS.has(part.tool)) return undefined
+    if (part.tool === "question") {
+      const status = (part as ToolPart).state?.type
+      if (status === "pending" || status === "running") return undefined
+    }
+    return "visible"
+  }
+  if (part.type === "text") return (part as TextPart).text?.trim() ? "visible" : undefined
+  if (part.type === "reasoning") {
+    if (showReasoningSummaries && (part as ReasoningPart).text?.trim()) return "visible"
+    return undefined
+  }
+  if (RENDERABLE_TYPES.has(part.type)) return "visible"
+  return undefined
+}
+
 // ─── MessageTimeline ───────────────────────────────────────────
 
 export const MessageTimeline = observer(function MessageTimeline() {
@@ -159,6 +281,17 @@ export const MessageTimeline = observer(function MessageTimeline() {
       turns.push({ user: msg, assistants: [] })
     } else if (msg.role === "assistant" && turns.length > 0) {
       turns[turns.length - 1].assistants.push(msg)
+    }
+  }
+
+  // Find the pending assistant message (last one with no time.completed)
+  // Source: session-turn.tsx:201-207
+  let activeTurnId: string | null = null
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.role === "assistant" && typeof (m as AssistantMessage).time.completed !== "number") {
+      activeTurnId = (m as AssistantMessage).parentID
+      break
     }
   }
 
@@ -180,8 +313,14 @@ export const MessageTimeline = observer(function MessageTimeline() {
       {turns.length === 0 && (
         <div style={styles.empty}>No messages in this session</div>
       )}
-      {turns.map((turn, i) => (
-        <TurnView key={turn.user.id} turn={turn} dirStore={dirStore} />
+      {turns.map((turn) => (
+        <TurnView
+          key={turn.user.id}
+          turn={turn}
+          dirStore={dirStore}
+          sessionStatus={status}
+          active={turn.user.id === activeTurnId}
+        />
       ))}
     </div>
   )
@@ -192,9 +331,13 @@ export const MessageTimeline = observer(function MessageTimeline() {
 const TurnView = observer(function TurnView({
   turn,
   dirStore,
+  sessionStatus,
+  active,
 }: {
   turn: { user: Message; assistants: Message[] }
   dirStore: any
+  sessionStatus: SessionStatus | null
+  active: boolean
 }) {
   const userParts: Part[] = dirStore.part[turn.user.id] ?? []
 
@@ -206,12 +349,99 @@ const TurnView = observer(function TurnView({
   const inlineFiles = files.filter(isInline)
   const agents = userParts.filter((p): p is AgentPart => p.type === "agent")
 
+  // ─── Turn-level computed values — source: session-turn.tsx ───
+
+  const status = sessionStatus?.type ?? "idle"
+
+  // Source: session-turn.tsx:318-323
+  const working = status !== "idle" && active
+
+  // Source: session-turn.tsx:284
+  const interrupted = turn.assistants.some((m) => {
+    const err = (m as AssistantMessage).error
+    return record(err) && (err as any).name === "MessageAbortedError"
+  })
+
+  // Source: session-turn.tsx:285-316
+  const errorAssistant = turn.assistants.find((m) => {
+    const err = (m as AssistantMessage).error
+    if (!err) return false
+    if (record(err) && (err as any).name === "MessageAbortedError") return false
+    return true
+  })
+  const errorText = (() => {
+    const err = (errorAssistant as AssistantMessage | undefined)?.error
+    if (!err) return undefined
+    if (record(err)) {
+      const data = (err as any).data
+      if (record(data)) {
+        const msg = typeof data.message === "string" ? data.message : undefined
+        if (msg) return unwrap(msg)
+      }
+      const msg = typeof (err as any).message === "string" ? (err as any).message : undefined
+      if (msg) return unwrap(msg)
+    }
+    if (typeof err === "string") return unwrap(err)
+    return String(err)
+  })()
+
+  // Source: session-turn.tsx:345-369
+  const assistantVisible = turn.assistants.reduce((count, m) => {
+    const parts: Part[] = dirStore.part[m.id] ?? []
+    return count + parts.filter((p) => partState(p) === "visible").length
+  }, 0)
+
+  const reasoningHeadingText = (() => {
+    for (let i = turn.assistants.length - 1; i >= 0; i--) {
+      const parts: Part[] = dirStore.part[turn.assistants[i].id] ?? []
+      for (let j = parts.length - 1; j >= 0; j--) {
+        const p = parts[j]
+        if (p.type === "reasoning" && (p as ReasoningPart).text?.trim()) {
+          const h = heading((p as ReasoningPart).text)
+          if (h) return h
+        }
+      }
+    }
+    return undefined
+  })()
+
+  // Source: session-turn.tsx:369
+  const showThinking = working && !errorAssistant && !interrupted && status !== "retry" && assistantVisible === 0
+
+  // Source: session-turn.tsx:330-344
+  const turnDurationMs = (() => {
+    let maxCompleted = 0
+    for (const m of turn.assistants) {
+      const completed = (m as AssistantMessage).time.completed
+      if (typeof completed === "number" && completed > maxCompleted) {
+        maxCompleted = completed
+      }
+    }
+    if (!maxCompleted) return undefined
+    return maxCompleted - (turn.user as UserMessage).time.created
+  })()
+
+  // Source: session-turn.tsx:285-289
+  const dividerLabel = (() => {
+    // Check for compaction part in assistant messages
+    for (const m of turn.assistants) {
+      const parts: Part[] = dirStore.part[m.id] ?? []
+      if (parts.some((p) => p.type === "compaction")) return "Compaction"
+    }
+    if (interrupted) return "Interrupted"
+    return ""
+  })()
+
+  // Check if any assistant is still streaming
+  const isAnyStreaming = turn.assistants.some(
+    (m) => typeof (m as AssistantMessage).time.completed !== "number"
+  )
+
   return (
     <div style={styles.turn}>
       {/* User message */}
       <div style={styles.userBubble}>
         <div style={styles.roleLabel}>User</div>
-        {/* Attached files — source: message-part.tsx:1070-1105 */}
         {attachments.length > 0 && (
           <div style={styles.userAttachments}>
             {attachments.map((file) => {
@@ -228,7 +458,6 @@ const TurnView = observer(function TurnView({
             })}
           </div>
         )}
-        {/* Text with highlighted inline file/agent references */}
         {text && (
           <div style={styles.userText}>
             <HighlightedText text={text} references={inlineFiles} agents={agents} />
@@ -239,22 +468,105 @@ const TurnView = observer(function TurnView({
         )}
       </div>
 
+      {/* Turn divider — source: session-turn.tsx:396-427 */}
+      {dividerLabel && <TurnDivider label={dividerLabel} />}
+
       {/* Assistant messages */}
       {turn.assistants.map((assistant) => (
-        <AssistantMessageView key={assistant.id} message={assistant} dirStore={dirStore} />
+        <AssistantMessageView
+          key={assistant.id}
+          message={assistant}
+          dirStore={dirStore}
+          isStreaming={typeof (assistant as AssistantMessage).time.completed !== "number"}
+        />
       ))}
+
+      {/* Thinking indicator */}
+      {showThinking && <ThinkingIndicator heading={reasoningHeadingText} />}
+
+      {/* Retry display */}
+      {status === "retry" && working && sessionStatus?.type === "retry" && (
+        <RetryDisplay
+          attempt={sessionStatus.attempt}
+          message={sessionStatus.message}
+          next={sessionStatus.next}
+        />
+      )}
+
+      {/* Error display */}
+      {errorText && <ErrorDisplay text={errorText} />}
+
+      {/* Duration */}
+      {turnDurationMs != null && turnDurationMs > 0 && (
+        <div style={styles.durationLine}>
+          <span style={styles.duration}>{formatDuration(turnDurationMs)}</span>
+        </div>
+      )}
     </div>
   )
 })
+
+// ─── New UI Components ─────────────────────────────────────────
+
+function ThinkingIndicator({ heading: headingText }: { heading?: string }) {
+  return (
+    <div style={styles.thinking}>
+      <span style={styles.thinkingText}>Thinking...</span>
+      {headingText && <span style={styles.thinkingHeading}>{headingText}</span>}
+    </div>
+  )
+}
+
+function ErrorDisplay({ text }: { text: string }) {
+  return (
+    <div style={styles.errorCard}>
+      {text}
+    </div>
+  )
+}
+
+function RetryDisplay({ attempt, message, next }: { attempt: number; message: string; next: number }) {
+  const [countdown, setCountdown] = React.useState(() =>
+    Math.max(0, Math.ceil((next - Date.now()) / 1000))
+  )
+
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((next - Date.now()) / 1000))
+      setCountdown(remaining)
+      if (remaining <= 0) clearInterval(interval)
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [next])
+
+  return (
+    <div style={styles.retryCard}>
+      <div style={styles.retryMessage}>{message}</div>
+      <div style={styles.retryInfo}>Attempt {attempt} · retrying in {countdown}s</div>
+    </div>
+  )
+}
+
+function TurnDivider({ label }: { label: string }) {
+  return (
+    <div style={styles.turnDivider}>
+      <span style={styles.turnDividerLine} />
+      <span style={styles.turnDividerLabel}>{label}</span>
+      <span style={styles.turnDividerLine} />
+    </div>
+  )
+}
 
 // ─── AssistantMessageView ──────────────────────────────────────
 
 const AssistantMessageView = observer(function AssistantMessageView({
   message,
   dirStore,
+  isStreaming,
 }: {
   message: Message
   dirStore: any
+  isStreaming?: boolean
 }) {
   const allParts: Part[] = dirStore.part[message.id] ?? []
 
@@ -279,7 +591,7 @@ const AssistantMessageView = observer(function AssistantMessageView({
           <span style={styles.costLabel}> ${(message as any).cost.toFixed(4)}</span>
         )}
       </div>
-      {renderableParts.length === 0 && (
+      {isStreaming && renderableParts.length === 0 && (
         <div style={styles.streaming}>Streaming...</div>
       )}
       {groups.map((group) => {
@@ -657,5 +969,72 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#666688",
     fontSize: 11,
     padding: "4px 0",
+  },
+  thinking: {
+    marginLeft: 24,
+    marginTop: 4,
+    padding: "6px 10px",
+    animation: "sse-viewer-shimmer 2s ease-in-out infinite",
+  },
+  thinkingText: {
+    fontSize: 12,
+    color: "#a78bfa",
+    fontStyle: "italic",
+  },
+  thinkingHeading: {
+    fontSize: 11,
+    color: "#8888aa",
+    marginLeft: 8,
+  },
+  errorCard: {
+    marginLeft: 24,
+    marginTop: 4,
+    padding: "8px 12px",
+    border: "1px solid #f87171",
+    borderRadius: 4,
+    backgroundColor: "rgba(248, 113, 113, 0.08)",
+    color: "#f87171",
+    fontSize: 12,
+  },
+  retryCard: {
+    marginLeft: 24,
+    marginTop: 4,
+    padding: "8px 12px",
+    border: "1px solid #fbbf24",
+    borderRadius: 4,
+    backgroundColor: "rgba(251, 191, 36, 0.08)",
+  },
+  retryMessage: {
+    fontSize: 12,
+    color: "#fbbf24",
+  },
+  retryInfo: {
+    fontSize: 11,
+    color: "#8888aa",
+    marginTop: 2,
+  },
+  turnDivider: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    margin: "8px 0",
+  },
+  turnDividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: "#2a2a4a",
+  },
+  turnDividerLabel: {
+    fontSize: 11,
+    color: "#666688",
+    textTransform: "uppercase" as const,
+  },
+  durationLine: {
+    marginLeft: 24,
+    marginTop: 4,
+  },
+  duration: {
+    fontSize: 11,
+    color: "#666688",
   },
 }
