@@ -138,6 +138,8 @@ export class SSEConnection {
   private enqueue(event: GlobalEvent) {
     // Discard "sync" type events (matching global-sdk.tsx behavior)
     if (event.payload.type === "sync") return
+    // Discard heartbeat — already handled by lastEventAt update in onmessage
+    if (event.payload.type === "server.heartbeat") return
 
     const dir = event.directory ?? "global"
 

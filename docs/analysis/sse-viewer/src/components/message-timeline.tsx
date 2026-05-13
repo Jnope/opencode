@@ -142,6 +142,22 @@ function isInline(part: FilePart) {
   return part.source?.text?.start !== undefined && part.source?.text?.end !== undefined
 }
 
+// ─── Path helpers — source: @opencode-ai/core/util/path ────────
+
+function getFilename(path: string | undefined): string {
+  if (!path) return ""
+  const trimmed = path.replace(/[/\\]+$/, "")
+  const parts = trimmed.split(/[/\\]/)
+  return parts[parts.length - 1] ?? ""
+}
+
+function getDirectory(path: string | undefined): string {
+  if (!path) return ""
+  const trimmed = path.replace(/[/\\]+$/, "")
+  const parts = trimmed.split(/[/\\]/)
+  return parts.slice(0, parts.length - 1).join("/") + "/"
+}
+
 // ─── Error parsing — source: session-turn.tsx:29-80 ───────────
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -612,6 +628,55 @@ const AssistantMessageView = observer(function AssistantMessageView({
   )
 })
 
+// ─── contextToolTrigger — source: message-part.tsx:711-761 ──────
+
+function contextToolTrigger(part: ToolPart): { title: string; subtitle: string; args: string[] } {
+  const input = (part.state as any).input ?? {} as Record<string, unknown>
+  const path = typeof input.path === "string" ? input.path : "/"
+  const filePath = typeof input.filePath === "string" ? input.filePath : undefined
+  const pattern = typeof input.pattern === "string" ? input.pattern : undefined
+  const include = typeof input.include === "string" ? input.include : undefined
+  const offset = typeof input.offset === "number" ? input.offset : undefined
+  const limit = typeof input.limit === "number" ? input.limit : undefined
+
+  switch (part.tool) {
+    case "read": {
+      const args: string[] = []
+      if (offset !== undefined) args.push("offset=" + offset)
+      if (limit !== undefined) args.push("limit=" + limit)
+      return {
+        title: "读取",
+        subtitle: filePath ? getFilename(filePath) : "",
+        args,
+      }
+    }
+    case "list":
+      return {
+        title: "列表",
+        subtitle: getDirectory(path),
+        args: [],
+      }
+    case "glob":
+      return {
+        title: "Glob",
+        subtitle: getDirectory(path),
+        args: pattern ? ["pattern=" + pattern] : [],
+      }
+    case "grep": {
+      const args: string[] = []
+      if (pattern) args.push("pattern=" + pattern)
+      if (include) args.push("include=" + include)
+      return {
+        title: "Grep",
+        subtitle: getDirectory(path),
+        args,
+      }
+    }
+    default:
+      return { title: part.tool, subtitle: "", args: [] }
+  }
+}
+
 // ─── ContextToolGroup — source: message-part.tsx:898-960 ───────
 
 function ContextToolGroup({ parts }: { parts: ToolPart[] }) {
@@ -621,31 +686,29 @@ function ContextToolGroup({ parts }: { parts: ToolPart[] }) {
   const busy = parts.some((p) => p.state.type === "running" || p.state.type === "pending")
 
   const summary = [
-    read > 0 ? `${read} read` : "",
-    search > 0 ? `${search} search` : "",
-    list > 0 ? `${list} list` : "",
+    read > 0 ? `${read} 读取` : "",
+    search > 0 ? `${search} 搜索` : "",
+    list > 0 ? `${list} 列表` : "",
   ].filter(Boolean).join(", ")
 
   return (
     <details style={styles.contextGroup}>
       <summary style={styles.contextGroupSummary}>
         <span style={busy ? styles.contextActive : styles.contextDone}>
-          {busy ? "Gathering context..." : "Gathered context"}
+          {busy ? "正在收集上下文..." : "已收集上下文"}
         </span>
         <span style={styles.contextSummary}>{summary}</span>
       </summary>
       <div style={styles.contextGroupDetail}>
         {parts.map((part) => {
-          const input = (part.state as any).input ?? {}
-          let subtitle = ""
-          if (part.tool === "read") subtitle = input.filePath ?? ""
-          else if (part.tool === "list") subtitle = input.path ?? "/"
-          else if (part.tool === "glob") subtitle = `${input.path ?? "/"} ${input.pattern ? "(" + input.pattern + ")" : ""}`
-          else if (part.tool === "grep") subtitle = `${input.path ?? "/"} ${input.pattern ? "(" + input.pattern + ")" : ""}`
+          const trigger = contextToolTrigger(part)
           return (
             <div key={part.id} style={styles.contextToolItem}>
-              <span style={styles.contextToolName}>{part.tool}</span>
-              {subtitle && <span style={styles.contextToolSubtitle}>{subtitle}</span>}
+              <span style={styles.contextToolName}>{trigger.title}</span>
+              {trigger.subtitle && <span style={styles.contextToolSubtitle}>{trigger.subtitle}</span>}
+              {trigger.args.map((arg) => (
+                <span key={arg} style={styles.contextToolArg}>{arg}</span>
+              ))}
             </div>
           )
         })}
@@ -922,6 +985,14 @@ const styles: Record<string, React.CSSProperties> = {
   },
   contextToolSubtitle: {
     color: "#a0a0a0",
+  },
+  contextToolArg: {
+    fontSize: 10,
+    color: "#666688",
+    backgroundColor: "#1a1a3e",
+    padding: "0 4px",
+    borderRadius: 2,
+    marginLeft: 4,
   },
   toolPart: {
     marginTop: 4,
