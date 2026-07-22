@@ -5,6 +5,6 @@ export default defineConfig({
   schema: "./src/**/*.sql.ts",
   out: "./migration",
   dbCredentials: {
-    url: "/home/thdxr/.local/share/opencode/opencode.db",
+    url: "/home/transwarp/.local/share/opencode/opencode.db",
   },
 })

@@ -3,6 +3,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { MCP } from "@/mcp"
 import { ConfigMCP } from "@/config/mcp"
+import { McpResultStore } from "@/mcp/result-store"
 import { errors } from "../../error"
 import { lazy } from "@/util/lazy"
 import { Effect } from "effect"
@@ -79,6 +80,47 @@ export const McpRoutes = lazy(() =>
           const mcp = yield* MCP.Service
           const result = yield* mcp.add(name, config)
           return result.status
+        }),
+    )
+    .get(
+      "/result/:id",
+      describeRoute({
+        summary: "Get MCP result",
+        description: "Retrieve a stored MCP tool call result by its ID.",
+        operationId: "mcp.result",
+        responses: {
+          200: {
+            description: "MCP result",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    id: z.string(),
+                    partID: z.string(),
+                    sessionID: z.string(),
+                    serverName: z.string(),
+                    toolName: z.string(),
+                    content: z.array(z.any()),
+                    metadata: z.record(z.string(), z.any()).optional(),
+                    createdAt: z.number(),
+                  }),
+                ),
+              },
+            },
+          },
+          404: {
+            description: "Result not found",
+          },
+        },
+      }),
+      validator("param", z.object({ id: z.string() })),
+      async (c) =>
+        jsonRequest("McpRoutes.result", c, function* () {
+          const { id } = c.req.valid("param")
+          const store = yield* McpResultStore.Service
+          const result = yield* store.get(id as any)
+          if (!result) return yield* Effect.fail(new Error("Result not found"))
+          return result
         }),
     )
     .post(

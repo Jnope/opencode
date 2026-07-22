@@ -8,12 +8,7 @@ import { Snapshot } from "@/snapshot"
 import { SyncEvent } from "../sync"
 import { Database } from "@/storage/db"
 import { NotFoundError } from "@/storage/storage"
-import { and } from "drizzle-orm"
-import { desc } from "drizzle-orm"
-import { eq } from "drizzle-orm"
-import { inArray } from "drizzle-orm"
-import { lt } from "drizzle-orm"
-import { or } from "drizzle-orm"
+import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "./session.sql"
 import * as ProviderError from "@/provider/error"
 import { iife } from "@/util/iife"
@@ -319,6 +314,7 @@ export const ToolStateCompleted = Schema.Struct({
     compacted: Schema.optional(Schema.Number),
   }),
   attachments: Schema.optional(Schema.Array(FilePart)),
+  mcp_result_id: Schema.optional(Schema.String),
 })
   .annotate({ identifier: "ToolStateCompleted" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -1016,6 +1012,18 @@ export function page(input: { sessionID: SessionID; limit: number; before?: stri
     more,
     cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
   }
+}
+
+export function count(sessionID: SessionID) {
+  return (
+    Database.use((db) =>
+      db
+        .select({ count: sql<number>`count(*)` })
+        .from(MessageTable)
+        .where(eq(MessageTable.session_id, sessionID))
+        .get(),
+    )?.count ?? 0
+  )
 }
 
 export function* stream(sessionID: SessionID) {

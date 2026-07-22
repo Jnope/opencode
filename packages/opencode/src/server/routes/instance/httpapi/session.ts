@@ -105,6 +105,7 @@ export const SessionPaths = {
   diff: `${root}/:sessionID/diff`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
+  messagesWithCount: `${root}/:sessionID/messagesWithCount`,
   create: root,
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
@@ -199,6 +200,21 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.messages",
             summary: "Get session messages",
             description: "Retrieve all messages in a session, including user prompts and AI responses.",
+          }),
+        ),
+        HttpApiEndpoint.get("messagesWithCount", SessionPaths.messagesWithCount, {
+          params: { sessionID: SessionID },
+          query: MessagesQuery,
+          success: Schema.Struct({
+            items: Schema.Array(MessageV2.WithParts),
+            total: Schema.Number,
+          }),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.messagesWithCount",
+            summary: "Get session messages with total count",
+            description: "Retrieve all messages in a session along with the total message count.",
           }),
         ),
         HttpApiEndpoint.get("message", SessionPaths.message, {
@@ -515,6 +531,36 @@ export const sessionHandlers = HttpApiBuilder.group(SessionApi, "session", (hand
           "X-Next-Cursor": page.cursor,
         },
       })
+    })
+
+    const messagesWithCount = Effect.fn("SessionHttpApi.messagesWithCount")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof MessagesQuery.Type
+    }) {
+      if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
+      if (ctx.query.before) {
+        yield* Effect.try({
+          try: () => MessageV2.cursor.decode(ctx.query.before!),
+          catch: () => new HttpApiError.BadRequest({}),
+        })
+      }
+
+      yield* session.get(ctx.params.sessionID)
+
+      let items: MessageV2.WithParts[]
+      if (ctx.query.limit === undefined || ctx.query.limit === 0) {
+        items = yield* session.messages({ sessionID: ctx.params.sessionID })
+      } else {
+        const page = MessageV2.page({
+          sessionID: ctx.params.sessionID,
+          limit: ctx.query.limit,
+          before: ctx.query.before,
+        })
+        items = page.items
+      }
+
+      const total = MessageV2.count(ctx.params.sessionID)
+      return { items, total }
     })
 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
@@ -920,6 +966,7 @@ export const sessionHandlers = HttpApiBuilder.group(SessionApi, "session", (hand
       .handle("todo", todo)
       .handle("diff", diff)
       .handle("messages", messages)
+      .handle("messagesWithCount", messagesWithCount)
       .handle("message", message)
       .handleRaw("create", createRaw)
       .handle("remove", remove)

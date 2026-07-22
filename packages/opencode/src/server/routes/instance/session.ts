@@ -700,6 +700,102 @@ export const SessionRoutes = lazy(() =>
       },
     )
     .get(
+      "/:sessionID/messagesWithCount",
+      describeRoute({
+        summary: "Get session messages with total count",
+        description: "Retrieve messages in a session along with the total message count.",
+        operationId: "session.messagesWithCount",
+        responses: {
+          200: {
+            description: "Messages with count",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    items: MessageV2.WithParts.zod.array(),
+                    total: z.number(),
+                  }),
+                ),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator(
+        "query",
+        z
+          .object({
+            limit: z.coerce
+              .number()
+              .int()
+              .min(0)
+              .optional()
+              .meta({ description: "Maximum number of messages to return" }),
+            before: z
+              .string()
+              .optional()
+              .meta({ description: "Opaque cursor for loading older messages" })
+              .refine(
+                (value) => {
+                  if (!value) return true
+                  try {
+                    MessageV2.cursor.decode(value)
+                    return true
+                  } catch {
+                    return false
+                  }
+                },
+                { message: "Invalid cursor" },
+              ),
+          })
+          .refine((value) => !value.before || value.limit !== undefined, {
+            message: "before requires limit",
+            path: ["before"],
+          }),
+      ),
+      async (c) => {
+        const query = c.req.valid("query")
+        const sessionID = c.req.valid("param").sessionID
+        const messages = await runRequest(
+          "SessionRoutes.messagesWithCount",
+          c,
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            yield* session.get(sessionID)
+            let items: MessageV2.WithParts[]
+            if (query.limit === undefined || query.limit === 0) {
+              items = yield* session.messages({ sessionID })
+            } else {
+              const page = MessageV2.page({
+                sessionID,
+                limit: query.limit,
+                before: query.before,
+              })
+              items = page.items
+              if (page.cursor) {
+                const url = new URL(c.req.url)
+                url.searchParams.set("limit", query.limit.toString())
+                url.searchParams.set("before", page.cursor)
+                c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor")
+                c.header("Link", `<${url.toString()}>; rel="next"`)
+                c.header("X-Next-Cursor", page.cursor)
+              }
+            }
+            const total = MessageV2.count(sessionID)
+            return { items, total }
+          }),
+        )
+        return c.json(messages)
+      },
+    )
+    .get(
       "/:sessionID/message/:messageID",
       describeRoute({
         summary: "Get message",

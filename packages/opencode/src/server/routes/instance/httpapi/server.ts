@@ -44,6 +44,7 @@ import { ExperimentalApi, experimentalHandlers } from "./experimental"
 import { GlobalApi, globalHandlers } from "./global"
 import { InstanceApi, instanceHandlers } from "./instance"
 import { McpApi, mcpHandlers } from "./mcp"
+import { McpResultStore } from "@/mcp/result-store"
 import { PermissionApi, permissionHandlers } from "./permission"
 import { ProjectApi, projectHandlers } from "./project"
 import { PtyApi, ptyConnectRoute, ptyHandlers } from "./pty"
@@ -106,7 +107,7 @@ const instanceApiRoutes = Layer.mergeAll(
   HttpApiBuilder.layer(ExperimentalApi).pipe(Layer.provide(experimentalHandlers)),
   HttpApiBuilder.layer(FileApi).pipe(Layer.provide(fileHandlers)),
   HttpApiBuilder.layer(InstanceApi).pipe(Layer.provide(instanceHandlers)),
-  HttpApiBuilder.layer(McpApi).pipe(Layer.provide(mcpHandlers)),
+  HttpApiBuilder.layer(McpApi).pipe(Layer.provide(mcpHandlers), Layer.provide(McpResultStore.defaultLayer)),
   HttpApiBuilder.layer(ProjectApi).pipe(Layer.provide(projectHandlers)),
   HttpApiBuilder.layer(PtyApi).pipe(Layer.provide(ptyHandlers)),
   HttpApiBuilder.layer(QuestionApi).pipe(Layer.provide(questionHandlers)),

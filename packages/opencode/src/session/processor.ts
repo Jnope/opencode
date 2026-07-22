@@ -12,6 +12,7 @@ import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
 import { PartID } from "./schema"
 import type { SessionID } from "./schema"
+import { McpResultStore } from "@/mcp/result-store"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
@@ -41,6 +42,9 @@ export interface Handle {
       metadata: Record<string, any>
       output: string
       attachments?: MessageV2.FilePart[]
+      content?: unknown[]
+      serverName?: string
+      toolName?: string
     },
   ) => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
@@ -90,6 +94,7 @@ export const layer: Layer.Layer<
   | Plugin.Service
   | SessionSummary.Service
   | SessionStatus.Service
+  | McpResultStore.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -104,6 +109,7 @@ export const layer: Layer.Layer<
     const summary = yield* SessionSummary.Service
     const scope = yield* Scope.Scope
     const status = yield* SessionStatus.Service
+    const mcpResultStore = yield* McpResultStore.Service
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -175,10 +181,26 @@ export const layer: Layer.Layer<
           metadata: Record<string, any>
           output: string
           attachments?: MessageV2.FilePart[]
+          content?: unknown[]
+          serverName?: string
+          toolName?: string
         },
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
+
+        let mcpResultID: string | undefined
+        if (output.content) {
+          mcpResultID = yield* mcpResultStore.put({
+            partID: match.part.id,
+            sessionID: match.part.sessionID,
+            serverName: output.serverName ?? "",
+            toolName: output.toolName ?? match.part.tool,
+            content: output.content,
+            metadata: output.metadata,
+          })
+        }
+
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -189,6 +211,7 @@ export const layer: Layer.Layer<
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
             attachments: output.attachments,
+            mcp_result_id: mcpResultID,
           },
         })
         yield* settleToolCall(toolCallID)
@@ -613,6 +636,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(Bus.layer),
     Layer.provide(Config.defaultLayer),
+    Layer.provide(McpResultStore.defaultLayer),
   ),
 )
 

@@ -1,5 +1,6 @@
 import { MCP } from "@/mcp"
 import { ConfigMCP } from "@/config/mcp"
+import { McpResultStore } from "@/mcp/result-store"
 import { Effect, Schema } from "effect"
 import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "./auth"
@@ -25,6 +26,17 @@ class UnsupportedOAuthError extends Schema.ErrorClass<UnsupportedOAuthError>("Mc
   { httpApiStatus: 400 },
 ) {}
 
+const McpResultResponse = Schema.Struct({
+  id: Schema.String,
+  partID: Schema.String,
+  sessionID: Schema.String,
+  serverName: Schema.String,
+  toolName: Schema.String,
+  content: Schema.Array(Schema.Unknown),
+  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  createdAt: Schema.Number,
+}).annotate({ identifier: "McpResultResponse" })
+
 export const McpPaths = {
   status: "/mcp",
   auth: "/mcp/:name/auth",
@@ -32,6 +44,7 @@ export const McpPaths = {
   authAuthenticate: "/mcp/:name/auth/authenticate",
   connect: "/mcp/:name/connect",
   disconnect: "/mcp/:name/disconnect",
+  result: "/mcp/result/:id",
 } as const
 
 export const McpApi = HttpApi.make("mcp")
@@ -120,6 +133,17 @@ export const McpApi = HttpApi.make("mcp")
             description: "Disconnect an MCP server.",
           }),
         ),
+        HttpApiEndpoint.get("result", McpPaths.result, {
+          params: { id: Schema.String },
+          success: McpResultResponse,
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "mcp.result.get",
+            summary: "Get raw MCP tool result",
+            description: "Retrieve the raw (untruncated) Model Context Protocol tool call result by ID.",
+          }),
+        ),
       )
       .annotateMerge(
         OpenApi.annotations({
@@ -140,6 +164,7 @@ export const McpApi = HttpApi.make("mcp")
 export const mcpHandlers = HttpApiBuilder.group(McpApi, "mcp", (handlers) =>
   Effect.gen(function* () {
     const mcp = yield* MCP.Service
+    const resultStore = yield* McpResultStore.Service
 
     const status = Effect.fn("McpHttpApi.status")(function* () {
       return yield* mcp.status()
@@ -188,6 +213,12 @@ export const mcpHandlers = HttpApiBuilder.group(McpApi, "mcp", (handlers) =>
       return true
     })
 
+    const result = Effect.fn("McpHttpApi.result")(function* (ctx: { params: { id: string } }) {
+      const stored = yield* resultStore.get(ctx.params.id as never)
+      if (!stored) return yield* new HttpApiError.NotFound({})
+      return stored
+    })
+
     return handlers
       .handle("status", status)
       .handle("add", add)
@@ -197,5 +228,6 @@ export const mcpHandlers = HttpApiBuilder.group(McpApi, "mcp", (handlers) =>
       .handle("authRemove", authRemove)
       .handle("connect", connect)
       .handle("disconnect", disconnect)
+      .handle("result", result)
   }),
 )

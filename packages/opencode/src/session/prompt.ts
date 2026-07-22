@@ -514,6 +514,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   messageID: input.processor.message.id,
                 })),
                 content: result.content,
+                serverName: (item as any)._serverName ?? key,
+                toolName: (item as any)._toolName ?? key,
               }
               if (opts.abortSignal?.aborted) {
                 yield* input.processor.completeToolCall(opts.toolCallId, output)

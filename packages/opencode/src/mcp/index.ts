@@ -115,7 +115,7 @@ function isMcpConfigured(entry: McpEntry): entry is ConfigMCP.Info {
 const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
 
 // Convert MCP tool definition to AI SDK Tool type
-function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
+function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, serverName: string, timeout?: number): Tool & { _serverName: string; _toolName: string } {
   const inputSchema = mcpTool.inputSchema
 
   // Spread first, then override type to ensure it's always "object"
@@ -126,7 +126,7 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
     additionalProperties: false,
   }
 
-  return dynamicTool({
+  const tool = dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
     execute: async (args: unknown) => {
@@ -142,7 +142,11 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
         },
       )
     },
-  })
+  }) as Tool & { _serverName: string; _toolName: string }
+
+  tool._serverName = serverName
+  tool._toolName = mcpTool.name
+  return tool
 }
 
 function defs(key: string, client: MCPClient, timeout?: number) {
@@ -642,7 +646,7 @@ export const layer = Layer.effect(
 
             const timeout = entry?.timeout ?? defaultTimeout
             for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, clientName, timeout)
             }
           }),
         { concurrency: "unbounded" },
