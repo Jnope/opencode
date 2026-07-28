@@ -33,6 +33,14 @@ interface FetchDecompressionError extends Error {
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached image(s) from tool result:"
 export { isMedia }
 
+export const Source = Schema.Union([
+  Schema.Literal("common"),
+  Schema.Literal("TradingAgents"),
+  Schema.Literal("NL2Strategy"),
+  Schema.Literal("SQLTool"),
+])
+export type Source = Schema.Schema.Type<typeof Source>
+
 export const OutputLengthError = namedSchemaError("MessageOutputLengthError", {})
 export const AbortedError = namedSchemaError("MessageAbortedError", { message: Schema.String })
 export const StructuredOutputError = namedSchemaError("StructuredOutputError", {
@@ -370,6 +378,7 @@ export type ToolPart = Omit<Types.DeepMutable<Schema.Schema.Type<typeof ToolPart
 const messageBase = {
   id: MessageID,
   sessionID: SessionID,
+  source: Schema.optional(Source),
 }
 
 export const User = Schema.Struct({
@@ -591,6 +600,7 @@ const PartUpdatedEventSchema = Schema.Struct({
   sessionID: SessionID,
   part: _Part,
   time: Schema.Number,
+  source: Schema.optional(Source),
 })
 
 const PartRemovedEventSchema = Schema.Struct({
@@ -626,6 +636,7 @@ export const Event = {
       partID: PartID,
       field: Schema.String,
       delta: Schema.String,
+      source: Schema.optional(Source),
     }),
   ),
   PartRemoved: SyncEvent.define({

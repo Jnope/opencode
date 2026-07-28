@@ -417,13 +417,14 @@ export interface Interface {
     messageID: MessageID
     partID: PartID
   }) => Effect.Effect<MessageV2.Part | undefined>
-  readonly updatePart: <T extends MessageV2.Part>(part: T) => Effect.Effect<T>
+  readonly updatePart: <T extends MessageV2.Part>(part: T, options?: { source?: MessageV2.Source }) => Effect.Effect<T>
   readonly updatePartDelta: (input: {
     sessionID: SessionID
     messageID: MessageID
     partID: PartID
     field: string
     delta: string
+    source?: MessageV2.Source
   }) => Effect.Effect<void>
   /** Finds the first message matching the predicate, searching newest-first. */
   readonly findMessage: (
@@ -536,13 +537,14 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> =
         return msg
       }).pipe(Effect.withSpan("Session.updateMessage"))
 
-    const updatePart = <T extends MessageV2.Part>(part: T): Effect.Effect<T> =>
+    const updatePart = <T extends MessageV2.Part>(part: T, options?: { source?: MessageV2.Source }): Effect.Effect<T> =>
       Effect.gen(function* () {
         yield* Effect.sync(() =>
           SyncEvent.run(MessageV2.Event.PartUpdated, {
             sessionID: part.sessionID,
             part: structuredClone(part),
             time: Date.now(),
+            source: options?.source,
           }),
         )
         return part
@@ -719,6 +721,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> =
       partID: PartID
       field: string
       delta: string
+      source?: MessageV2.Source
     }) {
       yield* bus.publish(MessageV2.Event.PartDelta, input)
     })

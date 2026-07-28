@@ -922,6 +922,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         },
         system: input.system,
         format: input.format,
+        source: input.source ?? "common",
       }
 
       yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -1387,6 +1388,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             providerID: model.providerID,
             time: { created: Date.now() },
             sessionID,
+            source: lastUser.source ?? "common",
           }
           yield* sessions.updateMessage(msg)
           const handle = yield* processor.create({
@@ -1693,6 +1695,7 @@ export const PromptInput = Schema.Struct({
   format: Schema.optional(MessageV2.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),
+  source: Schema.optional(MessageV2.Source),
   parts: Schema.Array(
     Schema.Union([
       MessageV2.TextPartInput,

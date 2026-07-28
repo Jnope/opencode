@@ -137,6 +137,9 @@ export const layer: Layer.Layer<
           aborted,
         })
 
+      const updatePart = <T extends MessageV2.Part>(part: T) =>
+        session.updatePart(part, { source: ctx.assistantMessage.source })
+
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
         delete ctx.toolcalls[toolCallID]
@@ -164,7 +167,7 @@ export const layer: Layer.Layer<
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match) return
-        const part = yield* session.updatePart(update(match.part))
+        const part = yield* updatePart(update(match.part))
         ctx.toolcalls[toolCallID] = {
           ...match.call,
           partID: part.id,
@@ -201,7 +204,7 @@ export const layer: Layer.Layer<
           })
         }
 
-        yield* session.updatePart({
+        yield* updatePart({
           ...match.part,
           state: {
             status: "completed",
@@ -220,7 +223,7 @@ export const layer: Layer.Layer<
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
-        yield* session.updatePart({
+        yield* updatePart({
           ...match.part,
           state: {
             status: "error",
@@ -253,7 +256,7 @@ export const layer: Layer.Layer<
               time: { start: Date.now() },
               metadata: value.providerMetadata,
             }
-            yield* session.updatePart(ctx.reasoningMap[value.id])
+            yield* updatePart(ctx.reasoningMap[value.id])
             return
 
           case "reasoning-delta":
@@ -266,6 +269,7 @@ export const layer: Layer.Layer<
               partID: ctx.reasoningMap[value.id].id,
               field: "text",
               delta: value.text,
+              source: ctx.assistantMessage.source,
             })
             return
 
@@ -275,7 +279,7 @@ export const layer: Layer.Layer<
             ctx.reasoningMap[value.id].text = ctx.reasoningMap[value.id].text
             ctx.reasoningMap[value.id].time = { ...ctx.reasoningMap[value.id].time, end: Date.now() }
             if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
-            yield* session.updatePart(ctx.reasoningMap[value.id])
+            yield* updatePart(ctx.reasoningMap[value.id])
             delete ctx.reasoningMap[value.id]
             return
 
@@ -283,7 +287,7 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
-            const part = yield* session.updatePart({
+            const part = yield* updatePart({
               id: ctx.toolcalls[value.id]?.partID ?? PartID.ascending(),
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
@@ -368,7 +372,7 @@ export const layer: Layer.Layer<
 
           case "start-step":
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
-            yield* session.updatePart({
+            yield* updatePart({
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.sessionID,
@@ -386,7 +390,7 @@ export const layer: Layer.Layer<
             ctx.assistantMessage.finish = value.finishReason
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
-            yield* session.updatePart({
+            yield* updatePart({
               id: PartID.ascending(),
               reason: value.finishReason,
               snapshot: yield* snapshot.track(),
@@ -400,7 +404,7 @@ export const layer: Layer.Layer<
             if (ctx.snapshot) {
               const patch = yield* snapshot.patch(ctx.snapshot)
               if (patch.files.length) {
-                yield* session.updatePart({
+                yield* updatePart({
                   id: PartID.ascending(),
                   messageID: ctx.assistantMessage.id,
                   sessionID: ctx.sessionID,
@@ -436,7 +440,7 @@ export const layer: Layer.Layer<
               time: { start: Date.now() },
               metadata: value.providerMetadata,
             }
-            yield* session.updatePart(ctx.currentText)
+            yield* updatePart(ctx.currentText)
             return
 
           case "text-delta":
@@ -449,6 +453,7 @@ export const layer: Layer.Layer<
               partID: ctx.currentText.id,
               field: "text",
               delta: value.text,
+              source: ctx.assistantMessage.source,
             })
             return
 
@@ -470,7 +475,7 @@ export const layer: Layer.Layer<
               ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
             }
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
-            yield* session.updatePart(ctx.currentText)
+            yield* updatePart(ctx.currentText)
             ctx.currentText = undefined
             return
 
@@ -487,7 +492,7 @@ export const layer: Layer.Layer<
         if (ctx.snapshot) {
           const patch = yield* snapshot.patch(ctx.snapshot)
           if (patch.files.length) {
-            yield* session.updatePart({
+            yield* updatePart({
               id: PartID.ascending(),
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.sessionID,
@@ -502,13 +507,13 @@ export const layer: Layer.Layer<
         if (ctx.currentText) {
           const end = Date.now()
           ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
-          yield* session.updatePart(ctx.currentText)
+          yield* updatePart(ctx.currentText)
           ctx.currentText = undefined
         }
 
         for (const part of Object.values(ctx.reasoningMap)) {
           const end = Date.now()
-          yield* session.updatePart({
+          yield* updatePart({
             ...part,
             time: { start: part.time.start ?? end, end },
           })
@@ -527,7 +532,7 @@ export const layer: Layer.Layer<
           const part = match.part
           const end = Date.now()
           const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
-          yield* session.updatePart({
+          yield* updatePart({
             ...part,
             state: {
               ...part.state,
