@@ -8,6 +8,8 @@ import {
   CallToolResultSchema,
   type Tool as MCPToolDef,
   ToolListChangedNotificationSchema,
+  ProgressNotificationSchema,
+  LoggingMessageNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { Config } from "@/config/config"
 import { ConfigMCP } from "../config/mcp"
@@ -62,6 +64,35 @@ export const BrowserOpenFailed = BusEvent.define(
   }),
 )
 
+export const Progress = BusEvent.define(
+  "mcp.progress",
+  Schema.Struct({
+    server: Schema.String,
+    progressToken: Schema.Union([Schema.String, Schema.Number]),
+    progress: Schema.Number,
+    total: Schema.optional(Schema.Number),
+    message: Schema.optional(Schema.String),
+    sessionID: Schema.optional(Schema.String),
+    messageID: Schema.optional(Schema.String),
+    callID: Schema.optional(Schema.String),
+    partID: Schema.optional(Schema.String),
+  }),
+)
+
+export const LoggingMessage = BusEvent.define(
+  "mcp.logging",
+  Schema.Struct({
+    server: Schema.String,
+    level: Schema.String,
+    logger: Schema.optional(Schema.String),
+    data: Schema.Unknown,
+    sessionID: Schema.optional(Schema.String),
+    messageID: Schema.optional(Schema.String),
+    callID: Schema.optional(Schema.String),
+    partID: Schema.optional(Schema.String),
+  }),
+)
+
 export const Failed = NamedError.create(
   "MCPFailed",
   z.object({
@@ -70,6 +101,37 @@ export const Failed = NamedError.create(
 )
 
 type MCPClient = Client
+
+export interface CallContext {
+  sessionID: string
+  messageID: string
+  callID: string
+  partID?: string
+}
+
+const callCtxMap = new WeakMap<object, CallContext>()
+
+export function setCallContext(tool: object, ctx: CallContext) {
+  callCtxMap.set(tool, ctx)
+}
+
+export function clearCallContext(tool: object) {
+  callCtxMap.delete(tool)
+}
+
+function getCallContext(tool: object): CallContext | undefined {
+  return callCtxMap.get(tool)
+}
+
+const lastCallCtx = new Map<string, CallContext>()
+
+function setLastCallCtx(server: string, ctx: CallContext) {
+  lastCallCtx.set(server, ctx)
+}
+
+function getLastCallCtx(server: string): CallContext | undefined {
+  return lastCallCtx.get(server)
+}
 
 const StatusConnected = Schema.Struct({ status: Schema.Literal("connected") }).annotate({
   identifier: "MCPStatusConnected",
@@ -115,7 +177,13 @@ function isMcpConfigured(entry: McpEntry): entry is ConfigMCP.Info {
 const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
 
 // Convert MCP tool definition to AI SDK Tool type
-function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, serverName: string, timeout?: number): Tool & { _serverName: string; _toolName: string } {
+function convertMcpTool(
+  mcpTool: MCPToolDef,
+  client: MCPClient,
+  serverName: string,
+  bus: Bus.Interface,
+  timeout?: number,
+): Tool & { _serverName: string; _toolName: string } {
   const inputSchema = mcpTool.inputSchema
 
   // Spread first, then override type to ensure it's always "object"
@@ -130,6 +198,8 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, serverName: stri
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
     execute: async (args: unknown) => {
+      const ctx = getCallContext(tool)
+      if (ctx) setLastCallCtx(serverName, ctx)
       return client.callTool(
         {
           name: mcpTool.name,
@@ -139,6 +209,23 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, serverName: stri
         {
           resetTimeoutOnProgress: true,
           timeout,
+onprogress: ctx
+                ? (progress) => {
+                    bus
+                      .publish(Progress, {
+                        server: serverName,
+                        progressToken: 0,
+                        progress: progress.progress,
+                        total: progress.total,
+                        message: progress.message,
+                        sessionID: ctx.sessionID,
+                        messageID: ctx.messageID,
+                        callID: ctx.callID,
+                        partID: ctx.partID,
+                      })
+                      .pipe(Effect.ignore, Effect.runFork)
+                  }
+                : undefined,
         },
       )
     },
@@ -473,6 +560,45 @@ export const layer = Layer.effect(
         s.defs[name] = listed
         await bridge.promise(bus.publish(ToolsChanged, { server: name }).pipe(Effect.ignore))
       })
+
+      client.setNotificationHandler(ProgressNotificationSchema, async (notification) => {
+        const { progressToken, progress, total, message } = notification.params
+        const ctx = getLastCallCtx(name)
+        await bridge.promise(
+          bus
+            .publish(Progress, {
+              server: name,
+              progressToken,
+              progress,
+              total,
+              message,
+              sessionID: ctx?.sessionID,
+              messageID: ctx?.messageID,
+              callID: ctx?.callID,
+              partID: ctx?.partID,
+            })
+            .pipe(Effect.ignore),
+        )
+      })
+
+      client.setNotificationHandler(LoggingMessageNotificationSchema, async (notification) => {
+        const { level, logger, data } = notification.params
+        const ctx = getLastCallCtx(name)
+        await bridge.promise(
+          bus
+            .publish(LoggingMessage, {
+              server: name,
+              level,
+              logger,
+              data,
+              sessionID: ctx?.sessionID,
+              messageID: ctx?.messageID,
+              callID: ctx?.callID,
+              partID: ctx?.partID,
+            })
+            .pipe(Effect.ignore),
+        )
+      })
     }
 
     const state = yield* InstanceState.make<State>(
@@ -646,7 +772,13 @@ export const layer = Layer.effect(
 
             const timeout = entry?.timeout ?? defaultTimeout
             for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, clientName, timeout)
+              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(
+                mcpTool,
+                client,
+                clientName,
+                bus,
+                timeout,
+              )
             }
           }),
         { concurrency: "unbounded" },

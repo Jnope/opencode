@@ -463,9 +463,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 { args },
               )
               yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+
+              const callCtx: MCP.CallContext = {
+                sessionID: ctx.sessionID,
+                messageID: input.processor.message.id,
+                callID: opts.toolCallId,
+              }
+              const toolPart = yield* input.processor.updateToolCall(opts.toolCallId, (match) => match)
+              if (toolPart) callCtx.partID = toolPart.id
+              MCP.setCallContext(item, callCtx)
               const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
                 execute(args, opts),
-              )
+              ).pipe(Effect.ensuring(Effect.sync(() => MCP.clearCallContext(item))))
               yield* plugin.trigger(
                 "tool.execute.after",
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
